@@ -20,34 +20,98 @@
 #ifndef _pwm_out_h_
 #define _pwm_out_h_
 
-
 #include "zf_common_typedef.h"
 
+//-------------------------------------------------------------------------------------------------------------------
+//  三相 PWM 输出与六步换相
+//
+//  本模块负责：
+//    1. 三相全桥 6 路 PWM 的引脚定义与初始化（PWMA，43.333kHz）
+//    2. 六步换相函数表 pwm_x_output[6]，换相时调用其中一个来导通对应两相
+//    3. 占空比更新、关输出、刹车
+//
+//  实现文件：pwm_out.c
+//-------------------------------------------------------------------------------------------------------------------
+
+
+//-------------------------------------------------------------------------------------------------------------------
+//  三相全桥引脚定义
+//
+//  A、B、C 三相，每相有上下两个桥臂，H 表示 High 上桥，L 表示 Low 下桥。
+//  任意时刻只导通一相上桥加另一相下桥，第三相悬空用于检测反电动势。
+//
+//  改引脚时除了这里，还要同步改：
+//      pwm_out.c 的 pwm_out_init() 里的 PWMA_PS 引脚映射
+//      motor_control.c 的 motor_init() 里的 gpio_init 调用
+//-------------------------------------------------------------------------------------------------------------------
 #define PWM_A_H_PIN     P00
 #define PWM_A_L_PIN     P01
-                         
+
 #define PWM_B_H_PIN     P02
 #define PWM_B_L_PIN     P03
-                         
+
 #define PWM_C_H_PIN     P04
 #define PWM_C_L_PIN     P05
+
+// 换相输出函数指针类型：六个换相函数都是无参无返回。
 typedef void(pwm_x_output_func)(void);
+
+//-------------------------------------------------------------------------------------------------------------------
+//  换相函数表，即六步换相顺序。这是无感换相的"输出侧"。
+//
+//  索引就是 motor.step，取值 0 至 5，换相时执行 pwm_x_output[motor.step]()。
+//
+//      step 0：A上 B下   监测 C 相
+//      step 1：A上 C下   监测 B 相
+//      step 2：B上 C下   监测 A 相
+//      step 3：B上 A下   监测 C 相
+//      step 4：C上 A下   监测 B 相
+//      step 5：C上 B下   监测 A 相
+//
+//  每个函数做两件事：设置 PWMA_ENO 决定使能哪几路输出，拉低对应下桥，
+//  再用 CMP_SELECT_x 选择要监测的悬空相。
+//-------------------------------------------------------------------------------------------------------------------
 extern pwm_x_output_func* pwm_x_output[6];
 
 
+// 是否使用互补输出。1 表示使能，此时 PWMA_ENO 会多带一位低桥，硬件自动插死区；
+// 0 表示只用单管。实际行为由 BLDC_USR_COMPLEMENTARY 决定，
+// 此变量用于运行时可切换，当前代码中固定为 0。
 extern uint8 g_use_complementary;
 
+
+//-------------------------------------------------------------------------------------------------------------------
+//  对外接口
+//-------------------------------------------------------------------------------------------------------------------
+
+// 刹车：关闭所有 PWM 输出，同时把三个下桥全部打开，即下桥短路制动，属于能耗制动。
+// 注意与 pwm_close_output() 的区别，后者是六路全关，电机自由滑行。
 void pwm_brake(void);
+
+// 关闭输出：六路全关，PWMA_ENO 清零。电机断电自由滑行，不会制动。
 void pwm_close_output(void);
-void pwm_a_bn_output();
-void pwm_a_cn_output();
-void pwm_b_cn_output();
-void pwm_b_an_output();
-void pwm_c_an_output();
-void pwm_c_bn_output();
+
+// 以下六个为六步换相函数，通过 pwm_x_output 表间接调用：
+void pwm_a_bn_output();     // step 0：A上 B下，监测 C
+void pwm_a_cn_output();     // step 1：A上 C下，监测 B
+void pwm_b_cn_output();     // step 2：B上 C下，监测 A
+void pwm_b_an_output();     // step 3：B上 A下，监测 C
+void pwm_c_an_output();     // step 4：C上 A下，监测 B
+void pwm_c_bn_output();     // step 5：C上 B下，监测 A
+
+// 关闭 PWM 更新中断。声明保留，当前实现中未见调用点。
 void pwm_isr_close(void);
+
+// 打开 PWM 更新中断。声明保留，当前实现中未见调用点。
 void pwm_isr_open(void);
+
+// 更新三路 PWM 的占空比，同时写入 CCR1、CCR2、CCR3，三相用同一个值。
+// 参数 duty 取值 0 至 BLDC_PWM_ARR_MAX(923)。
 void pwm_out_duty_update(uint16 duty);
+
+// PWM 初始化：配置 PWMA 三路输出、死区、周期 ARR、主输出使能。
+// 必须放在 motor_init() 之后调用，顺序反了会烧电机。
+// 原因是 GPIO 需要先被 motor_init 配置成推挽输出，PWM 才能正确接管引脚。
 void pwm_out_init(void);
 
 #endif

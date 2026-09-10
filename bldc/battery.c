@@ -24,43 +24,62 @@
 #include "battery.h"
 
 
+// ADC 配置。这三个宏和后面 DMA 寄存器之间是联动的，改一个就要同步改另一个，
+// 否则 DMA 会往数组外面写数据，把别的变量踩掉。
 #define	ADC_CH		1						/* 1~16, ADC转换通道数, 需同步修改 DMA_ADC_CHSW 转换通道 */
 #define	ADC_DATA	6						/* 6~n, 每个通道ADC转换数据总数, 2*转换次数+4, 需同步修改 DMA_ADC_CFG2 转换次数 */
+
+// DMA 目标地址。必须是 xdata 里一块固定的、不会被编译器挪动的地方。
 #define	DMA_ADDR	0x800					/* DMA数据存放地址 */
+
+// 采样缓冲区，用 _at_ 强制放在 DMA_ADDR 指定的地址上。
+// 形状是 [通道数][每通道数据数]，取用时只看 [0][0]。
 static uint8 xdata adc_dma_buff[ADC_CH][ADC_DATA] _at_ DMA_ADDR;
 
+// 换算后的电池电压，单位毫伏，全局可读
 uint16 battery_voltage;
 
 //-------------------------------------------------------------------------------------------------------------------
 //  @brief      电池电压获取
-//  @param      void                        
-//  @return     uint8 	0-正常 1-电池电压过低          
+//  @param      void
+//  @return     uint8 	0-正常 1-电池电压过低
 //  @since      v1.0
 //  Sample usage:
 //-------------------------------------------------------------------------------------------------------------------
+// 由 TM1_Isr 每 50us 调用一次，所以里面的计数单位是 50us。
 uint8 battery_voltage_get(void)
 {
     uint16 pin_voltage;
+    // 低压累计计数。用 static 保留上一次调用的值，用来实现"连续 2 秒"的判据。
     static uint32 low_power_num = 0;
+    // 注意这个局部变量，和 battery.h 里那个同名 extern 声明不是一回事
     uint16 adc_reg_value;
-	
+
+    // DMA 已经把转换结果搬进来了，直接读缓冲区首元素
     adc_reg_value = adc_dma_buff[0][0];
+    // ADC 是 8 位左对齐结果，256 对应 3300mV 的参考电压
     pin_voltage = (uint32)adc_reg_value * 3300 / 256;       // 将ADC值转换为实际的电压
+    // 硬件分压是 120k 比 20k，即分压比 6 倍，所以乘 120/20 还原出电池电压。
+    // 换成别的分压电阻时这一行要跟着改，另外 BLDC_MIN_BATTERY 也要重新标定。
     battery_voltage = (uint32)pin_voltage * 120/20;    	// 根据硬件分压电阻的值计算电池电压
-	
+
 	// 开启下一次ADC_DMA转换
+	// 这里必须每轮都写，否则 DMA 只会转换一次，之后电压值就再也不更新了。
 	DMA_ADC_CR = 0xc0;
-	
+
     if((BLDC_MIN_BATTERY > battery_voltage))
     {
+        // 低于阈值就累加，每 20 次为 1 毫秒（20 乘 50us）
         low_power_num++;
         if((2000 ) < (low_power_num / 20))		// 2s都超过电压保护值，则进行停机保护
         {
-           return 1;   
+           // 连续低于阈值 2 秒才报低压，避免大电流瞬间的压降造成误保护
+           return 1;
         }
     }
     else
     {
+        // 只要有一轮电压回到阈值以上，计数就清零，重新开始计时
         low_power_num = 0;
     }
 
@@ -69,29 +88,32 @@ uint8 battery_voltage_get(void)
 
 //-------------------------------------------------------------------------------------------------------------------
 //  @brief      电池电压检测初始化
-//  @param      void                        
-//  @return     void          
+//  @param      void
+//  @return     void
 //  @since      v1.0
 //  Sample usage:
 //-------------------------------------------------------------------------------------------------------------------
 void battery_init(void)
 {
-	
+	// 采样引脚配成高阻输入，让外部电阻分压网络决定引脚电压
 	gpio_init(IO_P15, GPI, 0, GPI_IMPEDANCE);
-	
+
 	ADC_CONTR = 0x80;						// ADC使能
 	ADCTIM = 0x3f;  						// 设置通道选择时间、保持时间、采样时间
 	ADCCFG = 0x0F;							// 左对齐，ADC转换时间最大
 
 	DMA_ADC_STA = 0x00;
-	DMA_ADC_CFG = 0x0F;		
+	DMA_ADC_CFG = 0x0F;
 	DMA_ADC_RXAH = (uint8)(DMA_ADDR >> 8);	//ADC转换数据存储地址
 	DMA_ADC_RXAL = (uint8)DMA_ADDR;
 	DMA_ADC_CFG2 = 0x00;					// 每个通道ADC转换次数:1
-	DMA_ADC_CHSW0 = 1<<5;				    // 
+	// 使能 ADC 通道。0x1<<5 对应第 6 个通道位，也就是实际接在 P15 上的那一路。
+	DMA_ADC_CHSW0 = 1<<5;				    //
 	DMA_ADC_CHSW1 = 0;					    // ADC通道使能寄存器
 	DMA_ADC_CR = 0xc0;						// 使能ADC_DMA,ADC开始转换。
-	
+
     // 初始化的时候先采集一次电压
+    // 这一次调用会读到全 0 的缓冲区，battery_voltage 会暂时算成 0，
+    // 要等下一次 DMA 转换完成才是真实值。
     battery_voltage_get();
 }
