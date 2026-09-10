@@ -1,0 +1,27 @@
+# Keil MDK / C251 编译产物
+project/mdk/out_file/
+
+# Keil 用户界面状态（各人窗口布局不同，不共享）
+*.uvgui.*
+*.uvgui
+
+# 编译中间文件（防止散落在 out_file/ 之外）
+*.lst
+*.obj
+*.crf
+*.dep
+*.lnp
+*.map
+*.hex
+*.iex
+*.build_log.htm
+*.__i
+*.bak
+*.sct
+*.o
+*.axf
+
+# 编辑器 / 系统
+.vs/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,5 @@
+{
+    // 本工程源码统一为 GBK/ANSI 编码（与 Keil C251 及 seekfree 原库一致）
+    "files.encoding": "gbk",
+    "files.autoGuessEncoding": false
+}
