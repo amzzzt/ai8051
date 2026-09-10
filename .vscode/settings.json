@@ -1,5 +1,11 @@
 {
     // 本工程源码统一为 GBK/ANSI 编码（与 Keil C251 及 seekfree 原库一致）
     "files.encoding": "gbk",
-    "files.autoGuessEncoding": false
+    "files.autoGuessEncoding": false,
+
+    // 例外：Markdown 文档用 UTF-8
+    // GitHub 的 Markdown 渲染器强制按 UTF-8 解析，存成 GBK 网页上会乱码
+    "[markdown]": {
+        "files.encoding": "utf8"
+    }
 }
